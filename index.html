@@ -1,0 +1,401 @@
+<!DOCTYPE html><html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Constellation Map</title>
+    <!-- Tailwind CSS via CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Custom CSS for star glow effects not easily achievable with Tailwind -->
+    <style>
+        /* Base star glow - using radial-gradient and multiple box-shadows */
+        .star {
+            background: radial-gradient(circle at center, rgba(255, 255, 255, 1) 0%, rgba(255, 255, 255, 0.7) 30%, rgba(173, 216, 230, 0.4) 60%, rgba(135, 206, 235, 0) 100%);
+            box-shadow: 0 0 8px 4px rgba(255, 255, 255, 0.8), /* Inner white glow */
+                        0 0 15px 8px rgba(173, 216, 230, 0.6), /* Outer light blue glow */
+                        0 0 30px 15px rgba(135, 206, 235, 0.4); /* Fainter wider glow */
+        }
+
+        /* Selected star glow - distinct yellow glow */
+        .star.selected {
+            box-shadow: 0 0 10px 5px rgba(255, 255, 0, 1), /* Intense yellow glow for selected */
+                        0 0 20px 10px rgba(255, 255, 100, 0.8),
+                        0 0 40px 20px rgba(255, 255, 150, 0.6);
+        }
+    </style>
+</head>
+<body class="m-0 overflow-hidden bg-[#0d0d1a] text-[#eee] font-sans">
+    <!-- Control buttons for mode, save, load, and clear -->
+    <div id="controls" class="absolute top-4 left-4 z-[100] flex gap-2 bg-black/40 p-4 rounded-lg shadow-xl">
+        <button id="toggleDrawingModeBtn" class="px-4 py-2 bg-[#2a2a4a] border border-[#4a4a7a] text-[#add8e6] rounded-md cursor-pointer transition-colors duration-200 text-sm tracking-wide hover:bg-[#3a3a6a] hover:border-[#6a6ab0] hover:text-white active:bg-[#1a1a3a] active:border-[#3a3a6a]">Toggle Drawing Mode (OFF)</button>
+        <button id="saveBtn" class="px-4 py-2 bg-[#2a2a4a] border border-[#4a4a7a] text-[#add8e6] rounded-md cursor-pointer transition-colors duration-200 text-sm tracking-wide hover:bg-[#3a3a6a] hover:border-[#6a6ab0] hover:text-white active:bg-[#1a1a3a] active:border-[#3a3a6a]">Save</button>
+        <button id="loadBtn" class="px-4 py-2 bg-[#2a2a4a] border border-[#4a4a7a] text-[#add8e6] rounded-md cursor-pointer transition-colors duration-200 text-sm tracking-wide hover:bg-[#3a3a6a] hover:border-[#6a6ab0] hover:text-white active:bg-[#1a1a3a] active:border-[#3a3a6a]">Load</button>
+        <button id="clearBtn" class="px-4 py-2 bg-[#2a2a4a] border border-[#4a4a7a] text-[#add8e6] rounded-md cursor-pointer transition-colors duration-200 text-sm tracking-wide hover:bg-[#3a3a6a] hover:border-[#6a6ab0] hover:text-white active:bg-[#1a1a3a] active:border-[#3a3a6a]">Clear All</button>
+    </div>
+
+    <!-- Main canvas area for stars and lines -->
+    <div id="constellation-canvas" class="relative w-screen h-screen cursor-crosshair select-none
+                                          data-[drawing-mode='true']:cursor-pointer">
+        <!-- SVG container for drawing lines -->
+        <svg id="constellation-lines" class="absolute top-0 left-0 w-full h-full z-[40] pointer-events-none">
+            <!-- Lines will be dynamically appended here -->
+        </svg>
+        <!-- Stars will be dynamically appended as children of #constellation-canvas -->
+    </div>
+
+    <script>
+        /**
+         * Interactive Constellation Map
+         * This script manages the creation of stars, drawing lines between them,
+         * and persisting the constellation data to localStorage.
+         */
+
+        // --- DOM Elements ---
+        const constellationCanvas = document.getElementById('constellation-canvas');
+        const svgContainer = document.getElementById('constellation-lines');
+        const toggleDrawingModeBtn = document.getElementById('toggleDrawingModeBtn');
+        const saveBtn = document.getElementById('saveBtn');
+        const loadBtn = document.getElementById('loadBtn');
+        const clearBtn = document.getElementById('clearBtn');
+
+        // --- Application State ---
+        /**
+         * @typedef {Object} Star
+         * @property {string} id - Unique identifier for the star.
+         * @property {number} x - X-coordinate (left) of the star on the canvas.
+         * @property {number} y - Y-coordinate (top) of the star on the canvas.
+         */
+        let stars = []; // Array of Star objects
+
+        /**
+         * @typedef {Object} Line
+         * @property {string} id - Unique identifier for the line.
+         * @property {string} star1Id - ID of the first connected star.
+         * @property {string} star2Id - ID of the second connected star.
+         */
+        let lines = []; // Array of Line objects
+
+        let drawingMode = false; // True if in line-drawing mode, false for star creation mode
+        let selectedStar = null; // Stores the Star object of the first selected star for drawing a line
+
+        // --- Utility Functions ---
+
+        /**
+         * Generates a unique ID for stars or lines.
+         * @param {string} prefix - A prefix for the ID (e.g., 'star', 'line').
+         * @returns {string} A unique ID string.
+         */
+        function generateId(prefix) {
+            return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        }
+
+        /**
+         * Finds a star object from the 'stars' array by its DOM element.
+         * @param {HTMLElement} element - The star's DOM element.
+         * @returns {Star | undefined} The star object, or undefined if not found.
+         */
+        function getStarByElement(element) {
+            const starId = element.dataset.starId;
+            return stars.find(s => s.id === starId);
+        }
+
+        /**
+         * Finds a star object from the 'stars' array by its ID.
+         * @param {string} id - The unique ID of the star.
+         * @returns {Star | undefined} The star object, or undefined if not found.
+         */
+        function getStarById(id) {
+            return stars.find(s => s.id === id);
+        }
+
+        /**
+         * Checks if a line already exists between two stars, regardless of selection order.
+         * @param {string} starAId - ID of the first star.
+         * @param {string} starBId - ID of the second star.
+         * @returns {boolean} True if a line already exists, false otherwise.
+         */
+        function lineExists(starAId, starBId) {
+            // Sort IDs to ensure consistent comparison (e.g., 'star-1' + 'star-2' is same as 'star-2' + 'star-1')
+            const sortedIds = [starAId, starBId].sort();
+            return lines.some(line => {
+                const lineSortedIds = [line.star1Id, line.star2Id].sort();
+                return lineSortedIds[0] === sortedIds[0] && lineSortedIds[1] === sortedIds[1];
+            });
+        }
+
+        // --- DOM Manipulation & Rendering ---
+
+        /**
+         * Creates and appends a star DOM element to the canvas.
+         * @param {Star} starObj - The star object containing id, x, and y.
+         * @returns {HTMLElement} The created star DOM element.
+         */
+        function createStarElement(starObj) {
+            const starDiv = document.createElement('div');
+            starDiv.classList.add('star', 'absolute', 'w-[14px]', 'h-[14px]', 'rounded-full', 'z-[50]', 'cursor-pointer', 'transition-all', 'duration-150', 'ease-out', '-translate-x-1/2', '-translate-y-1/2');
+            starDiv.style.left = `${starObj.x}px`;
+            starDiv.style.top = `${starObj.y}px`;
+            starDiv.dataset.starId = starObj.id; // Store ID for easy lookup
+            starDiv.setAttribute('role', 'img'); // For accessibility
+            starDiv.setAttribute('aria-label', `Star at ${starObj.x}, ${starObj.y}`);
+            starDiv.addEventListener('click', handleStarClick); // Attach individual click listener
+            constellationCanvas.appendChild(starDiv);
+            return starDiv;
+        }
+
+        /**
+         * Creates and appends an SVG line element to the SVG container.
+         * @param {Line} lineObj - The line object containing id, star1Id, and star2Id.
+         * @param {Star} star1 - The first star object connected by the line.
+         * @param {Star} star2 - The second star object connected by the line.
+         * @returns {SVGLineElement} The created SVG line element.
+         */
+        function createLineElement(lineObj, star1, star2) {
+            const lineSvg = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            lineSvg.setAttribute('x1', star1.x);
+            lineSvg.setAttribute('y1', star1.y);
+            lineSvg.setAttribute('x2', star2.x);
+            lineSvg.setAttribute('y2', star2.y);
+            lineSvg.classList.add('constellation-line', 'stroke-[#add8e6]', 'stroke-[2.5]', 'rounded-full', 'transition-all', 'duration-200', 'pointer-events-auto');
+            lineSvg.dataset.lineId = lineObj.id; // Store ID for easy lookup
+            lineSvg.dataset.star1Id = star1.id; // Store connected star IDs
+            lineSvg.dataset.star2Id = star2.id;
+            lineSvg.setAttribute('aria-label', `Line connecting star ${star1.id} and star ${star2.id}`);
+            // Add hover effect via JS for simplicity with Tailwind's lack of direct SVG stroke hover
+            lineSvg.addEventListener('mouseover', () => {
+                lineSvg.classList.add('stroke-white', 'stroke-[3.5]');
+            });
+            lineSvg.addEventListener('mouseout', () => {
+                lineSvg.classList.remove('stroke-white', 'stroke-[3.5]');
+            });
+            svgContainer.appendChild(lineSvg);
+            return lineSvg;
+        }
+
+        /**
+         * Clears all stars and lines from the DOM and state.
+         */
+        function clearAll() {
+            stars = [];
+            lines = [];
+            // Reset selected star if any
+            if (selectedStar) {
+                const prevSelectedStarEl = document.querySelector(`.star[data-star-id="${selectedStar.id}"]`);
+                if (prevSelectedStarEl) {
+                    prevSelectedStarEl.classList.remove('selected');
+                }
+                selectedStar = null;
+            }
+
+            // Remove all star elements from the canvas
+            // Start from the end to avoid issues with live NodeList
+            const starElements = constellationCanvas.querySelectorAll('.star');
+            starElements.forEach(starEl => starEl.remove());
+
+            // Remove all line elements from the SVG container
+            while (svgContainer.firstChild) {
+                svgContainer.removeChild(svgContainer.firstChild);
+            }
+
+            updateDrawingModeUI(); // Ensure cursor resets if needed
+            console.log('Canvas cleared.');
+        }
+
+        /**
+         * Renders all stars and lines from the current state arrays.
+         * This is useful for loading saved states.
+         */
+        function renderAll() {
+            clearAll(); // Clear existing elements before re-rendering
+            stars.forEach(star => {
+                createStarElement(star); // Re-create DOM elements for stars
+            });
+            lines.forEach(line => {
+                const star1 = getStarById(line.star1Id);
+                const star2 = getStarById(line.star2Id);
+                if (star1 && star2) { // Ensure both stars exist before attempting to draw a line
+                    createLineElement(line, star1, star2); // Re-create SVG elements for lines
+                } else {
+                    console.warn(`Could not render line ${line.id}: one or both connected stars not found. This line will be omitted.`);
+                    // Optionally, remove this invalid line from the 'lines' array
+                    // lines = lines.filter(l => l.id !== line.id);
+                }
+            });
+        }
+
+        // --- Event Handlers ---
+
+        /**
+         * Handles clicks on the main constellation canvas.
+         * Creates a new star if not in drawing mode and click is not on an existing star.
+         * @param {MouseEvent} event - The click event.
+         */
+        function handleCanvasClick(event) {
+            // Only create stars if not in drawing mode and the click target is the canvas itself, not a star.
+            if (!drawingMode && event.target === constellationCanvas) {
+                const newStar = {
+                    id: generateId('star'),
+                    x: event.clientX,
+                    y: event.clientY
+                };
+                stars.push(newStar);
+                createStarElement(newStar);
+            }
+        }
+
+        /**
+         * Handles clicks on individual star elements.
+         * Manages star selection and line drawing logic when in drawing mode.
+         * @param {MouseEvent} event - The click event on a star.
+         */
+        function handleStarClick(event) {
+            event.stopPropagation(); // Prevent the canvas click handler from firing
+
+            if (drawingMode) {
+                const clickedStarElement = event.target;
+                const clickedStar = getStarByElement(clickedStarElement);
+
+                if (!selectedStar) {
+                    // This is the first star selected for a potential line
+                    selectedStar = clickedStar;
+                    clickedStarElement.classList.add('selected'); // Add visual feedback
+                    clickedStarElement.setAttribute('aria-selected', 'true');
+                    console.log(`Star ${selectedStar.id} selected.`);
+                } else if (selectedStar.id === clickedStar.id) {
+                    // Clicking the same star again deselects it
+                    clickedStarElement.classList.remove('selected');
+                    clickedStarElement.setAttribute('aria-selected', 'false');
+                    selectedStar = null;
+                    console.log(`Star ${clickedStar.id} deselected.`);
+                } else {
+                    // This is the second star selected, attempt to draw a line
+                    if (!lineExists(selectedStar.id, clickedStar.id)) {
+                        const newLine = {
+                            id: generateId('line'),
+                            star1Id: selectedStar.id,
+                            star2Id: clickedStar.id
+                        };
+                        lines.push(newLine);
+                        createLineElement(newLine, selectedStar, clickedStar);
+                        console.log(`Line drawn between ${selectedStar.id} and ${clickedStar.id}.`);
+                    } else {
+                        console.log(`Line already exists between ${selectedStar.id} and ${clickedStar.id}.`);
+                    }
+
+                    // Reset selection after attempting to draw a line (whether successful or not)
+                    const prevSelectedStarEl = document.querySelector(`.star[data-star-id="${selectedStar.id}"]`);
+                    if (prevSelectedStarEl) {
+                        prevSelectedStarEl.classList.remove('selected');
+                        prevSelectedStarEl.setAttribute('aria-selected', 'false');
+                    }
+                    selectedStar = null;
+                }
+            }
+        }
+
+        /**
+         * Toggles the drawing mode on/off.
+         * Updates UI elements and deselects any currently selected star.
+         */
+        function toggleDrawingMode() {
+            drawingMode = !drawingMode;
+            updateDrawingModeUI();
+            // Deselect any star if mode changes to prevent accidental line drawing
+            if (selectedStar) {
+                const prevSelectedStarEl = document.querySelector(`.star[data-star-id="${selectedStar.id}"]`);
+                if (prevSelectedStarEl) {
+                    prevSelectedStarEl.classList.remove('selected');
+                    prevSelectedStarEl.setAttribute('aria-selected', 'false');
+                }
+                selectedStar = null;
+            }
+            toggleDrawingModeBtn.setAttribute('aria-pressed', drawingMode);
+            console.log(`Drawing Mode: ${drawingMode ? 'ON' : 'OFF'}`);
+        }
+
+        /**
+         * Updates the UI (canvas cursor, button text) based on the current drawing mode state.
+         */
+        function updateDrawingModeUI() {
+            if (drawingMode) {
+                constellationCanvas.dataset.drawingMode = 'true'; // Use data attribute for Tailwind JIT
+                toggleDrawingModeBtn.textContent = 'Toggle Drawing Mode (ON)';
+            } else {
+                constellationCanvas.dataset.drawingMode = 'false';
+                toggleDrawingModeBtn.textContent = 'Toggle Drawing Mode (OFF)';
+            }
+        }
+
+        /**
+         * Saves the current state of stars and lines to localStorage.
+         */
+        function saveState() {
+            try {
+                localStorage.setItem('constellationStars', JSON.stringify(stars));
+                localStorage.setItem('constellationLines', JSON.stringify(lines));
+                console.log('Constellations saved to localStorage.');
+                alert('Constellations saved successfully!');
+            } catch (e) {
+                console.error('Failed to save to localStorage:', e);
+                alert('Failed to save constellations. Your browser might be in private mode or storage is full.');
+            }
+        }
+
+        /**
+         * Loads the state of stars and lines from localStorage and re-renders them.
+         */
+        function loadState() {
+            try {
+                const savedStars = localStorage.getItem('constellationStars');
+                const savedLines = localStorage.getItem('constellationLines');
+
+                if (savedStars && savedLines) {
+                    stars = JSON.parse(savedStars);
+                    lines = JSON.parse(savedLines);
+                    renderAll(); // Re-render everything from loaded data
+                    console.log('Constellations loaded from localStorage.');
+                    alert('Constellations loaded successfully!');
+                } else {
+                    console.log('No saved constellations found.');
+                    alert('No saved constellations found.');
+                }
+            } catch (e) {
+                console.error('Failed to load from localStorage:', e);
+                alert('Failed to load constellations. Saved data might be corrupt.');
+            }
+        }
+
+        // --- Initialization ---
+
+        /**
+         * Initializes the application by attaching event listeners and setting initial UI state.
+         */
+        function initializeApp() {
+            // Add event listeners to control buttons
+            constellationCanvas.addEventListener('click', handleCanvasClick);
+            toggleDrawingModeBtn.addEventListener('click', toggleDrawingMode);
+            saveBtn.addEventListener('click', saveState);
+            loadBtn.addEventListener('click', loadState);
+            clearBtn.addEventListener('click', clearAll);
+
+            // Set initial accessibility attributes for buttons
+            toggleDrawingModeBtn.setAttribute('aria-pressed', 'false');
+            saveBtn.setAttribute('aria-label', 'Save current constellation map');
+            loadBtn.setAttribute('aria-label', 'Load saved constellation map');
+            clearBtn.setAttribute('aria-label', 'Clear all stars and lines from the map');
+
+            // Set initial UI state based on drawing mode
+            updateDrawingModeUI();
+
+            // Optionally load state on page load for a persistent experience
+            // loadState(); // Uncomment this line if you want to automatically load on page refresh
+        }
+
+        // Initialize the application when the DOM is fully loaded
+        document.addEventListener('DOMContentLoaded', initializeApp);
+    </script>
+
+    <div style="position:fixed;bottom:10px;right:10px;background:rgba(0,0,0,0.7);color:white;padding:5px 10px;border-radius:5px;font-family:sans-serif;font-size:12px">
+        Created with Holy Grail AI
+    </div>
+    
+</body></html>
